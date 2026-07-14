@@ -58,15 +58,20 @@ AUTH = {"Basic " + base64.b64encode((u + ":" + _secret("VOICE_APP_PASSWORD")).en
 INSTRUCTIONS = (
     "You are the live voice interface of Claude, the AI assistant of DST (Digital "
     "Sign Technologies — printhead maintenance equipment). You are speaking with "
-    "the owner. Match whatever language they speak — usually English "
-    "or Russian, but Spanish, German, French or any other language works the same — "
+    "the owner. Match whatever language they speak — English, "
+    "Russian, but Spanish, German, French or any other language works the same — "
     "and switch when he does. Keep replies short and conversational: this is speech, "
     "not text.\n\n"
-    "You yourself are only the mouth and ears. For ANY question that involves DST's "
-    "business, products, prices, customers, emails, documents, the state of the "
-    "server, or anything requiring real knowledge or an action, you MUST call the "
-    "ask_claude tool and then relay its answer faithfully in your own voice (translate "
-    "to the spoken language if needed, condense long answers to their substance). "
+    "You yourself are mostly the mouth and ears, with one exception: the QUICK "
+    "REFERENCE at the end of these instructions. Questions it answers (prices, "
+    "product basics, company facts) you answer DIRECTLY, instantly, without any "
+    "tool — that's the fast path. For everything else involving DST's business, "
+    "customers, emails, documents, the state of the server, or anything requiring "
+    "knowledge beyond the reference or an action, you MUST call the ask_claude tool "
+    "and then relay its answer faithfully in your own voice (translate to the spoken "
+    "language if needed, condense long answers to their substance). Never guess or "
+    "extrapolate beyond the reference — a price or spec not listed there goes to "
+    "ask_claude. "
     "Claude can take ten seconds or more — say a brief 'one moment' phrase BEFORE "
     "calling the tool. Only pure small talk (greetings, 'how are you', chit-chat) may "
     "be answered without the tool. Never invent facts about DST; when in doubt, ask "
@@ -158,13 +163,49 @@ TOOLS = [{
     },
 }]
 
+# Quick-reference digest injected into the session instructions: the full price
+# list + company blurb + the most-asked cached Q&As, rebuilt at most every 5 min —
+# so easy questions are answered by the realtime model itself, zero round-trip.
+KB = os.path.expanduser("~/DST/knowledge-base")
+_digest = {"text": "", "ts": 0}
+
+
+def kb_digest():
+    if _digest["text"] and time.time() - _digest["ts"] < 300:
+        return _digest["text"]
+    parts = []
+    try:
+        parts.append("### DST price list (current)\n"
+                     + open(os.path.join(KB, "products", "price-list.md")).read())
+    except Exception:
+        pass
+    try:
+        parts.append("### Company basics\n"
+                     + open(os.path.join(KB, "company", "company-profile.md")).read()[:1500])
+    except Exception:
+        pass
+    try:
+        rows = qa_cache._cx().execute(
+            "SELECT question, answer FROM qa WHERE hits > 0 "
+            "ORDER BY hits DESC LIMIT 25").fetchall()
+        if rows:
+            parts.append("### Frequently asked\n" + "\n".join(
+                f"Q: {q}\nA: {a[:400]}" for q, a in rows))
+    except Exception:
+        pass
+    _digest.update(text="\n\n".join(parts), ts=time.time())
+    return _digest["text"]
+
+
 def session_body(voice):
     return {
         "expires_after": {"anchor": "created_at", "seconds": 600},
         "session": {
             "type": "realtime",
             "model": MODEL,
-            "instructions": INSTRUCTIONS,
+            "instructions": INSTRUCTIONS
+                + "\n\n==== QUICK REFERENCE — answer these directly and instantly, "
+                  "no tool call ====\n\n" + kb_digest(),
             "tools": TOOLS,
             "audio": {
                 # semantic_vad ignores partial noise/echo fragments far better than
