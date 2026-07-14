@@ -1,0 +1,322 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>DST Voice — Claude</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; background: #111; color: #eee;
+         margin: 0; display: flex; flex-direction: column; height: 100dvh; }
+  #log { flex: 1; overflow-y: auto; padding: 14px; font-size: 15px; line-height: 1.45; }
+  .you { color: #8ecbff; } .ai { color: #b5f2b5; } .sys { color: #888; font-size: 13px; }
+  #bar { padding: 14px; display: flex; gap: 10px; align-items: center; }
+  #btn { flex: 1; padding: 16px; font-size: 18px; border: 0; border-radius: 12px;
+         background: #2e7d32; color: #fff; }
+  #btn.live { background: #c62828; }
+  #dot { width: 12px; height: 12px; border-radius: 50%; background: #555; }
+  #dot.on { background: #4caf50; animation: p 1.2s infinite; }
+  @keyframes p { 50% { opacity: .35; } }
+</style>
+</head>
+<body>
+<div id="log"><div class="sys">Tap Start, allow the microphone, and just talk.
+Casual chat is answered instantly by the voice model; anything real goes to Claude
+(you'll hear "one moment").</div></div>
+<div id="bar">
+  <div id="dot"></div>
+  <button id="btn">▶ Start voice conversation</button>
+  <button id="cam" aria-label="camera" style="width:46px;height:46px;border-radius:50%;border:3px solid #fff;background:#c62828;flex:none"></button>
+  <div style="display:flex;flex-direction:column;gap:5px;align-items:stretch">
+    <select id="voice" style="padding:5px;border-radius:8px;background:#222;color:#eee;border:1px solid #444;font-size:12px">
+      <option value="cedar" selected>Cedar ♂</option>
+      <option value="echo">Echo ♂</option>
+      <option value="verse">Verse ♂</option>
+      <option value="marin">Marin ♀</option>
+      <option value="coral">Coral ♀</option>
+    </select>
+    <label style="font-size:11px;color:#aaa;white-space:nowrap"><input type="checkbox" id="duplex" checked> mic off when talking</label>
+  </div>
+</div>
+<script>
+let pc, dc, mic, live = false;
+const log = (cls, t) => { const d = document.createElement('div'); d.className = cls;
+  d.textContent = t; const L = document.getElementById('log'); L.appendChild(d);
+  L.scrollTop = L.scrollHeight; };
+
+async function start() {
+  const sess = await (await fetch('session', {method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({voice: document.getElementById('voice').value})})).json();
+  if (!sess.value) { log('sys', 'token error: ' + JSON.stringify(sess).slice(0, 200)); return; }
+  pc = new RTCPeerConnection();
+  const audio = new Audio(); audio.autoplay = true;
+  pc.ontrack = e => audio.srcObject = e.streams[0];
+  mic = await navigator.mediaDevices.getUserMedia({audio: {
+    echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
+  pc.addTrack(mic.getTracks()[0], mic);
+  dc = pc.createDataChannel('oai-events');
+  dc.onmessage = e => onEvent(JSON.parse(e.data));
+  dc.onopen = () => { live = true; document.getElementById('dot').className = 'on';
+    document.getElementById('btn').textContent = '■ Stop'; document.getElementById('btn').className = 'live';
+    log('sys', 'connected — talk now'); };
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  const r = await fetch('https://api.openai.com/v1/realtime/calls?model=gpt-realtime', {
+    method: 'POST', body: offer.sdp,
+    headers: {Authorization: 'Bearer ' + sess.value, 'Content-Type': 'application/sdp'}});
+  await pc.setRemoteDescription({type: 'answer', sdp: await r.text()});
+}
+
+function stop() {
+  if (mic) mic.getTracks().forEach(t => t.stop());
+  if (pc) pc.close();
+  live = false; document.getElementById('dot').className = '';
+  document.getElementById('btn').textContent = '▶ Start voice conversation';
+  document.getElementById('btn').className = '';
+  log('sys', 'disconnected');
+}
+
+// Half-duplex: mute the mic while the assistant is speaking so a loud speaker
+// can't feed the bot's own voice back in (it starts talking to itself). Costs
+// voice barge-in (tap Stop to cut it off); toggle below if using headphones.
+let unmuteT;
+function setMic(on) {
+  clearTimeout(unmuteT);
+  if (!mic) return;
+  const gate = document.getElementById('duplex').checked;
+  if (on) unmuteT = setTimeout(() => mic.getTracks()[0].enabled = true, 350);
+  else if (gate) mic.getTracks()[0].enabled = false;
+}
+
+async function onEvent(ev) {
+  if (ev.type === 'input_audio_buffer.speech_started') {
+    clearTimeout(photoPromptT); quiet = false;   // user is commenting — window over
+  }
+  if (ev.type === 'response.created' && quiet) {
+    // Stray response inside the post-photo quiet window (shutter sound, ambient
+    // noise) — kill it before it speaks.
+    dc.send(JSON.stringify({type: 'response.cancel'}));
+    dc.send(JSON.stringify({type: 'output_audio_buffer.clear'}));
+    return;
+  }
+  if (ev.type === 'output_audio_buffer.started') setMic(false);
+  else if (ev.type === 'output_audio_buffer.stopped' || ev.type === 'output_audio_buffer.cleared') {
+    setMic(true);
+    if (pendingReconnect) {
+      pendingReconnect = false;
+      stop(); start().catch(e => log('sys', 'reconnect failed: ' + e));
+    }
+  }
+  else if (ev.type === 'conversation.item.input_audio_transcription.completed') {
+    log('you', '🎙 ' + ev.transcript); toServer('you', ev.transcript);
+  } else if (ev.type === 'response.output_audio_transcript.done') {
+    log('ai', '🔊 ' + ev.transcript); toServer('ai', ev.transcript);
+  }
+  else if (ev.type === 'response.done')
+    for (const item of (ev.response?.output || []))
+      if (item.type === 'function_call') handleTool(item);
+  else if (ev.type === 'error')
+    log('sys', 'error: ' + (ev.error?.message || JSON.stringify(ev)));
+}
+
+// Fire-and-forget transcript archiving on the box (searchable chat log).
+function toServer(who, text) {
+  try { fetch('log', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({who, text})}); } catch (e) {}
+}
+// Diagnostics: shown on screen AND reported to the server log for remote debugging.
+function diag(text) { log('sys', text); toServer('diag', text); }
+window.onerror = (m, src, line) => diag('JS ERROR: ' + m + ' @' + line);
+// getUserMedia can HANG on iOS instead of rejecting — race it against a timeout.
+const gum = c => Promise.race([
+  navigator.mediaDevices.getUserMedia(c),
+  new Promise((_, rej) => setTimeout(() => rej(new Error('getUserMedia timeout (4s)')), 4000))]);
+
+function toolReply(callId, obj, respond = true) {
+  dc.send(JSON.stringify({type: 'conversation.item.create',
+    item: {type: 'function_call_output', call_id: callId, output: JSON.stringify(obj)}}));
+  // Without response.create the model stays silent and just carries on — used for
+  // actions that must not produce chatter (e.g. screen clear).
+  if (respond) dc.send(JSON.stringify({type: 'response.create'}));
+}
+
+async function showMedia(item) {
+  const q = JSON.parse(item.arguments).query;
+  log('sys', '🖼 searching: ' + q);
+  let items = [];
+  try {
+    items = (await (await fetch('media', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query: q})})).json()).items || [];
+  } catch (e) {}
+  const L = document.getElementById('log');
+  for (const m of items) {
+    const el = document.createElement(m.kind === 'video' ? 'video' : 'img');
+    el.src = 'file/' + m.token;
+    el.style.cssText = 'max-width:96%;border-radius:10px;margin:6px 0;display:block';
+    if (m.kind === 'video') { el.controls = true; el.playsInline = true; el.preload = 'metadata'; }
+    L.appendChild(el);
+    if (m.caption) log('sys', m.caption);
+  }
+  L.scrollTop = L.scrollHeight;
+  toolReply(item.call_id, items.length
+    ? {shown: items.map(m => m.kind + ': ' + m.caption)}
+    : {shown: [], note: 'nothing matching in the media library'});
+}
+
+// After a full context clear, reconnect once the confirmation finishes playing,
+// so the voice model itself also starts with a blank slate.
+let pendingReconnect = false;
+
+async function clearChat(item) {
+  const scope = JSON.parse(item.arguments).scope;
+  document.getElementById('log').innerHTML = '';
+  if (scope === 'context') {
+    try { await fetch('reset', {method: 'POST'}); } catch (e) {}
+    pendingReconnect = true;
+    log('sys', 'context cleared — starting a fresh session…');
+    toolReply(item.call_id, {done: true, scope});
+  } else {
+    log('sys', 'screen cleared');
+    toolReply(item.call_id, {done: true, scope}, false);   // silent — no response
+  }
+}
+
+// Camera: an IN-PAGE live preview via getUserMedia — unlike a file-input picker,
+// this may be opened without a tap gesture, so the voice command alone works.
+// The user taps the shutter; the frame is captured off a canvas and uploaded.
+let photoPromptT, camStream, quiet = false;
+
+async function uploadPhoto(blob) {
+  const img = document.createElement('img');
+  img.src = URL.createObjectURL(blob);
+  img.style.cssText = 'max-width:96%;border-radius:10px;margin:6px 0;display:block';
+  const L = document.getElementById('log'); L.appendChild(img); L.scrollTop = L.scrollHeight;
+  log('sys', 'uploading photo…');
+  try {
+    const r = await (await fetch('photo', {method: 'POST',
+      headers: {'Content-Type': blob.type || 'image/jpeg'}, body: blob})).json();
+    log('sys', r.ok ? '📷 saved & sent to Telegram (' + r.name + ')' : 'upload failed');
+    if (r.ok && dc && dc.readyState === 'open') {
+      sysNote('Internal state update, not user input: a photo WAS taken and saved; ' +
+              'the camera is now closed. Stay SILENT — the user may comment or give ' +
+              'instructions. Respond only when they actually speak, in the language ' +
+              'they speak.');
+      // Give the user 5s to comment; if they stay silent, ask what to do with it.
+      // Their speech (speech_started) cancels this — see onEvent.
+      clearTimeout(photoPromptT);
+      photoPromptT = setTimeout(() => {
+        quiet = false;
+        if (dc && dc.readyState === 'open')
+          dc.send(JSON.stringify({type: 'response.create', response: {instructions:
+            'The user took a photo and has said nothing for 5 seconds. Ask briefly, ' +
+            'in the language of the conversation: what should I do with the photo?'}}));
+      }, 5000);
+    } else { quiet = false; }
+  } catch (e) { quiet = false; log('sys', 'upload failed: ' + e); }
+}
+
+function sysNote(text) {
+  if (dc && dc.readyState === 'open')
+    dc.send(JSON.stringify({type: 'conversation.item.create', item: {type: 'message',
+      role: 'system', content: [{type: 'input_text', text}]}}));
+}
+
+function closeCamera(snapped) {
+  const wasOpen = !!camStream;
+  if (camStream) camStream.getTracks().forEach(t => t.stop());
+  camStream = null;
+  const box = document.getElementById('cambox');
+  if (box) box.remove();
+  if (!wasOpen) return;
+  // Swallow the close-tap noise so VAD doesn't fire a response off it.
+  if (mic) { mic.getTracks()[0].enabled = false;
+    setTimeout(() => { if (mic && !pendingReconnect) mic.getTracks()[0].enabled = true; }, 800); }
+  // Keep the model's world-state accurate, or it refuses the next "open camera"
+  // believing the camera is still up. (The snapped case gets its own note after
+  // the upload — see uploadPhoto.)
+  if (!snapped)
+    sysNote('Internal state update, not user input: the camera view was closed '
+          + 'WITHOUT taking a photo — nothing was captured. Do NOT comment on this; '
+          + 'stay silent. If the user asks to open the camera again, call open_camera.');
+}
+
+async function openCamera(item) {
+  diag('openCamera: begin (via ' + (item ? 'voice' : 'button') + ')');
+  closeCamera();
+  try {
+    camStream = await gum(
+      {video: {facingMode: 'environment', width: {ideal: 1920}}, audio: false});
+  } catch (e1) {
+    diag('camera attempt 1 failed: ' + (e1.name || '') + ' ' + (e1.message || e1));
+    await new Promise(r => setTimeout(r, 500));   // camera may release slowly — retry
+    try {
+      camStream = await gum({video: true, audio: false});
+    } catch (e) {
+      diag('camera attempt 2 failed: ' + (e.name || '') + ' ' + (e.message || e));
+      if (item) toolReply(item.call_id,
+        {opened: false, error: String(e.name || e), note: 'tell the user it failed'});
+      return;
+    }
+  }
+  diag('camera stream acquired');
+  if (item) toolReply(item.call_id, {opened: true});
+  const box = document.createElement('div');
+  box.id = 'cambox';
+  box.style.cssText = 'position:fixed;inset:0;background:#000;z-index:50;' +
+                      'display:flex;flex-direction:column';
+  const v = document.createElement('video');
+  v.autoplay = true; v.playsInline = true; v.muted = true; v.srcObject = camStream;
+  v.style.cssText = 'flex:1;object-fit:contain;min-height:0';
+  const bar = document.createElement('div');
+  bar.style.cssText = 'display:flex;justify-content:center;align-items:center;' +
+                      'gap:40px;padding:18px;background:#111';
+  const shut = document.createElement('button');
+  shut.setAttribute('aria-label', 'take photo');
+  shut.style.cssText = 'width:76px;height:76px;border-radius:50%;' +
+                       'border:4px solid #fff;background:#c62828';
+  shut.onclick = () => {
+    const c = document.createElement('canvas');
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext('2d').drawImage(v, 0, 0);
+    closeCamera(true);
+    // Quiet window: swallow the shutter sound (mic off 1.2s) and cancel any bot
+    // response not initiated by real user speech until the 5s ask fires.
+    quiet = true;
+    if (mic) { mic.getTracks()[0].enabled = false;
+      setTimeout(() => { if (mic && !pendingReconnect) mic.getTracks()[0].enabled = true; }, 1200); }
+    c.toBlob(b => b && uploadPhoto(b), 'image/jpeg', 0.85);
+  };
+  const x = document.createElement('button');
+  x.textContent = '✕';
+  x.style.cssText = 'font-size:26px;width:56px;height:56px;border-radius:50%;' +
+                    'border:2px solid #888;background:#222;color:#ccc';
+  x.onclick = closeCamera;
+  bar.append(shut, x);
+  box.append(v, bar);
+  document.body.appendChild(box);
+}
+
+async function handleTool(item) {
+  if (item.name === 'open_camera') return openCamera(item);
+  if (item.name === 'clear_chat') return clearChat(item);
+  if (item.name === 'show_media') return showMedia(item);
+  const q = JSON.parse(item.arguments).question;
+  log('sys', '→ Claude: ' + q);
+  let out;
+  try {
+    const r = await (await fetch('ask', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({question: q})})).json();
+    out = r.answer || ('error: ' + r.error);
+  } catch (e) { out = 'The Claude bridge failed: ' + e; }
+  log('sys', '← Claude answered (' + out.length + ' chars)');
+  toolReply(item.call_id, {answer: out});
+}
+
+document.getElementById('btn').onclick = () =>
+  (live ? stop() : start().catch(e => log('sys', 'failed: ' + e)));
+document.getElementById('cam').onclick = () => openCamera(null);
+</script>
+</body>
+</html>
