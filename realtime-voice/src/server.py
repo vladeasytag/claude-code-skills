@@ -60,14 +60,12 @@ def _save_group():
 
 def known_groups():
     """Telegram groups the gateway has seen (from the bridge sessions file),
-    minus this app's own home group — can't sneak into ourselves. Duplicate
-    titles (group->supergroup migrations) keep only the most recently active
-    chat_id, so we never post into a dead pre-migration group."""
+    Duplicate titles (group->supergroup migrations) keep only the most recently
+    active chat_id, so we never post into a dead pre-migration group."""
     cands = {}
     try:
         for cid, ent in json.load(open(bridge.C.SESSIONS_FILE)).items():
-            if (ent.get("ctype") in ("group", "supergroup") and ent.get("title")
-                    and int(cid) != VOICE_TG_CHAT):
+            if ent.get("ctype") in ("group", "supergroup") and ent.get("title"):
                 cands[int(cid)] = ent["title"]
     except Exception as e:
         print(f"[server] known_groups failed: {e}", flush=True)
