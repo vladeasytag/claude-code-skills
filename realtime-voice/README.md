@@ -28,6 +28,15 @@ through an outbound tunnel (Tailscale Funnel or `cloudflared`).
   give instructions; if they don't, it asks what to do with the photo.
 - **`clear_chat` tool** → "clear screen" wipes the transcript silently; "clear
   context / new chat" also resets the Claude session and reconnects fresh.
+- **Group mode** — "switch to our website chat" links the voice session to a
+  Telegram group the bot is in (fuzzy name match; official title confirmed
+  verbally and pinned in a banner on top of the page, surviving reloads and
+  server restarts). While linked, both sides of the spoken conversation are
+  mirrored **silently** into the group (`disable_notification`), `ask_claude`
+  runs in that group's Claude session, and a spool hands the spoken exchange to
+  the group's next Claude turn — voice and Telegram become one continuous
+  project conversation. "Leave the group" unlinks, clears the transcript and
+  context, and reconnects fresh.
 - **Speakerphone-proof:** semantic VAD, echo cancellation, half-duplex mic gating
   (mic muted while the bot talks — toggleable for headphones), shutter/tap noise
   suppression, cancel-stray-responses window after photos.

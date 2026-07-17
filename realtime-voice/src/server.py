@@ -37,8 +37,71 @@ MODEL = "gpt-realtime"
 # only be chosen up front, so the page offers a picker and sends it to /session.
 VOICES = {"cedar", "echo", "verse", "marin", "coral"}
 VOICE = "cedar"                         # default voice; see VOICES
-BRIDGE_CHAT = "realtime-voice"          # persistent Claude session key
+BRIDGE_CHAT = "realtime-voice"          # persistent Claude session key (standalone)
 SECRET = open(os.path.join(DIR, ".secret")).read().strip()
+
+# ---- Telegram group link ("sneak into a group") ------------------------------
+# While linked, every spoken line (both sides) is mirrored SILENTLY into the
+# chosen Telegram group (disable_notification), archived under that group's
+# chat_id, and queued via bridge.spool_note so the group's Claude session hears
+# the exchange on its next turn. ask_claude routes to the GROUP's session, so
+# voice and Telegram become one continuous conversation.
+GROUP_LINK_FILE = os.path.join(DIR, "group_link.json")
+GROUP = {"chat_id": None, "title": None}
+try:
+    GROUP.update(json.load(open(GROUP_LINK_FILE)))
+except Exception:
+    pass
+
+
+def _save_group():
+    json.dump(GROUP, open(GROUP_LINK_FILE, "w"))
+
+
+def known_groups():
+    """Telegram groups the gateway has seen (from the bridge sessions file),
+    minus this app's own home group — can't sneak into ourselves. Duplicate
+    titles (group->supergroup migrations) keep only the most recently active
+    chat_id, so we never post into a dead pre-migration group."""
+    cands = {}
+    try:
+        for cid, ent in json.load(open(bridge.C.SESSIONS_FILE)).items():
+            if (ent.get("ctype") in ("group", "supergroup") and ent.get("title")
+                    and int(cid) != VOICE_TG_CHAT):
+                cands[int(cid)] = ent["title"]
+    except Exception as e:
+        print(f"[server] known_groups failed: {e}", flush=True)
+        return {}
+    last = {}
+    if chatdb:
+        try:
+            with chatdb._lock:
+                last = {str(k): v for k, v in chatdb._get().execute(
+                    "SELECT chat_id, MAX(epoch) FROM messages GROUP BY chat_id")}
+        except Exception:
+            pass
+    by_title = {}
+    for cid, title in cands.items():
+        prev = by_title.get(title)
+        if prev is None or (last.get(str(cid)) or 0) > (last.get(str(prev)) or 0):
+            by_title[title] = cid
+    return {cid: title for title, cid in by_title.items()}
+
+
+def resolve_group(spoken):
+    """Fuzzy-match a spoken name ('our website chat') to a known group title."""
+    stop = {"the", "our", "a", "chat", "group", "project", "chats", "team"}
+    words = [w for w in re.findall(r"\w+", spoken.lower()) if w not in stop]
+    best, best_score = None, 0.0
+    for cid, title in known_groups().items():
+        twords = set(re.findall(r"\w+", title.lower()))
+        hits = sum(1 for w in words if w in twords or any(w in t for t in twords))
+        score = hits / max(len(words), 1)
+        if spoken.lower().strip() == title.lower():
+            score = 2.0
+        if score > best_score:
+            best, best_score = (cid, title), score
+    return best if best_score >= 0.5 else None
 
 def _secret(name):
     for line in open(os.path.expanduser("~/.config/dst/secrets.env")):
@@ -87,6 +150,15 @@ INSTRUCTIONS = (
     "faithfully) and relay Claude's answer. NEVER acknowledge feedback with a promise "
     "('we'll work on it', 'I'll be faster') without calling the tool — an unforwarded "
     "promise is a lie, because nothing will actually happen.\n\n"
+    "GROUP MODE: the user can link this voice chat to one of the Telegram "
+    "groups the bot is in ('switch to our website chat', 'sneak into the "
+    "operations group') — call switch_group with the name as spoken. On "
+    "success, confirm verbally using the OFFICIAL title from the result: 'We're "
+    "now in <title>'. While linked, the whole conversation is mirrored into that "
+    "group and Claude answers with that group's project context. When the user "
+    "says 'leave the group' / 'leave the project', call "
+    "leave_group — this returns to standalone voice chat and clears the "
+    "conversation context; confirm in a few words.\n\n"
     "If asked to change your voice: explain that the voice is fixed for the current "
     "call — pick a different one in the dropdown next to Start, then reconnect.\n\n"
     "Turn discipline: the user is often on a speakerphone. If an input sounds like an "
@@ -159,6 +231,33 @@ TOOLS = [{
     },
 }, {
     "type": "function",
+    "name": "switch_group",
+    "description": "Link this voice chat to a Telegram group. Call IMMEDIATELY "
+                   "when the user asks to switch/move/sneak into a group, project "
+                   "or chat by name ('switch to our website chat'). The result has "
+                   "the matched official title — confirm verbally: 'We're now in "
+                   "<title>'. If ok is false, briefly say it didn't match and read "
+                   "the available group names.",
+    "parameters": {
+        "type": "object",
+        "properties": {"name": {
+            "type": "string",
+            "description": "The group/project name as the user said it, in ENGLISH "
+                           "(translate if spoken in another language).",
+        }},
+        "required": ["name"],
+    },
+}, {
+    "type": "function",
+    "name": "leave_group",
+    "description": "Unlink the voice chat from the current Telegram group. Call "
+                   "IMMEDIATELY when the user says 'leave the group' / 'leave the "
+                   "project' / 'exit the group'. Reverts to standalone voice chat "
+                   "and clears the conversation context. Confirm in a few words "
+                   "('We left <title>, fresh start').",
+    "parameters": {"type": "object", "properties": {}},
+}, {
+    "type": "function",
     "name": "ask_claude",
     "description": "Ask Claude (the real DST assistant with full workspace, email, KB "
                     "and tool access) anything. Use for every substantive question or "
@@ -215,6 +314,10 @@ def session_body(voice):
             "type": "realtime",
             "model": MODEL,
             "instructions": INSTRUCTIONS
+                + (f"\n\nCURRENT STATE: this voice chat is LINKED to the Telegram "
+                   f"group \"{GROUP['title']}\" — the conversation is mirrored "
+                   f"there and Claude answers with that group's context."
+                   if GROUP["chat_id"] else "")
                 + "\n\n==== QUICK REFERENCE — answer these directly and instantly, "
                   "no tool call ====\n\n" + kb_digest(),
             "tools": TOOLS,
@@ -268,11 +371,31 @@ def find_media(query, k=4, min_score=0.25, ratio=0.8):
 
 
 def archive(who, text):
-    """Log one spoken line (both sides) to the chat archive under its own
-    pseudo-chat, so voice sessions are searchable like any Telegram thread."""
-    if chatdb and text and text.strip():
-        chatdb.record(text, "in" if who == "you" else "out",
-                      sender="owner" if who == "you" else "voice-model",
+    """Log one spoken line (both sides) to the chat archive — under the linked
+    Telegram group while in group mode (plus a SILENT mirror into the group and a
+    bridge spool note so the group's Claude session hears the exchange), else
+    under the standalone voice pseudo-chat."""
+    if not text or not text.strip():
+        return
+    sender = "owner" if who == "you" else "voice-model"
+    if GROUP["chat_id"]:
+        if chatdb:
+            chatdb.record(text, "in" if who == "you" else "out", sender=sender,
+                          chat_id=GROUP["chat_id"], chat_title=GROUP["title"],
+                          kind="voice")
+        label = os.environ.get("TG_OWNER_NAME", "Owner").split()[0] if who == "you" else "Claude"
+        if text.lstrip().startswith("["):       # system marker, not actual speech
+            bridge.spool_note(GROUP["chat_id"], f"(voice app) {text}")
+        else:
+            bridge.spool_note(GROUP["chat_id"], f"{label} (voice): {text}")
+        if not text.lstrip().startswith("["):   # markers: context only, not the group
+            try:
+                TG._call("sendMessage", chat_id=GROUP["chat_id"],
+                         text=f"\U0001F399 {label}: {text}"[:4000], disable_notification=True)
+            except Exception as e:
+                print(f"[server] group mirror failed: {e}", flush=True)
+    elif chatdb:
+        chatdb.record(text, "in" if who == "you" else "out", sender=sender,
                       chat_id=BRIDGE_CHAT, chat_title="Realtime Voice", kind="voice")
 
 
@@ -296,7 +419,9 @@ def save_camera_photo(data, ctype):
     try:
         with open(path, "rb") as fh:
             TG._call("sendPhoto", _files={"photo": fh}, _timeout=60,
-                     chat_id=VOICE_TG_CHAT, caption="📷 from the voice app")
+                     chat_id=GROUP["chat_id"] or VOICE_TG_CHAT,
+                     caption="📷 from the voice app",
+                     disable_notification=bool(GROUP["chat_id"]))
     except Exception as e:
         print(f"[server] telegram forward failed: {e}", flush=True)
     return path
@@ -306,7 +431,10 @@ def ask_claude(question):
     # While a fresh camera photo exists, questions may refer to it — point Claude at
     # the file and keep such turns OUT of the Q&A cache (both lookup and store).
     fresh_photo = LAST_PHOTO["path"] and time.time() - LAST_PHOTO["ts"] < 600
-    if not fresh_photo:
+    # Group mode: answers depend on the group's running context — bypass the
+    # shared Q&A cache entirely (both lookup and store).
+    use_cache = not fresh_photo and not GROUP["chat_id"]
+    if use_cache:
         # Semantic Q&A cache: a repeat question (even reworded) returns in ~0.1s
         # instead of a full Claude turn. The realtime model restates questions
         # self-contained (tool description), so bridge questions cache safely.
@@ -323,8 +451,11 @@ def ask_claude(question):
                    f"{LAST_PHOTO['path']}. If the question refers to what they "
                    f"photographed ('this part', 'what is this'), open that image and "
                    f"look at it.]")
-    answer = bridge.ask(BRIDGE_CHAT, prompt, sender=os.environ.get("TG_OWNER_NAME", "Owner") + " (realtime voice)")
-    if not fresh_photo:
+    # Group mode routes to the GROUP's own Claude session — same context as the
+    # Telegram chat itself, which just heard the spoken exchange via the spool.
+    answer = bridge.ask(GROUP["chat_id"] or BRIDGE_CHAT, prompt,
+                        sender=os.environ.get("TG_OWNER_NAME", "Owner") + " (realtime voice)")
+    if use_cache:
         qa_cache.store(question, answer, source="voice-app")
     return answer
 
@@ -378,6 +509,8 @@ class H(BaseHTTPRequestHandler):
         if r in ("/", "/index.html"):
             self._send(200, open(os.path.join(DIR, "index.html"), "rb").read(),
                        "text/html; charset=utf-8")
+        elif r == "/group":
+            self._send(200, {"title": GROUP["title"]})
         elif r and r.startswith("/file/") and MEDIA_TOKENS.get(r[6:]):
             self._serve_media(MEDIA_TOKENS[r[6:]])
         else:
@@ -405,6 +538,32 @@ class H(BaseHTTPRequestHandler):
                                          self.headers.get("Content-Type", "image/jpeg"))
                 self.log_message("camera photo saved: %s", os.path.basename(path))
                 self._send(200, {"ok": True, "name": os.path.basename(path)})
+            elif r == "/group":
+                n = int(self.headers.get("Content-Length", 0))
+                d = json.loads(self.rfile.read(n)) if n else {}
+                if d.get("leave"):
+                    old = GROUP["title"]
+                    if GROUP["chat_id"]:
+                        archive("you", "[left the group — voice chat back to standalone]")
+                    GROUP.update(chat_id=None, title=None)
+                    _save_group()
+                    bridge.reset(BRIDGE_CHAT)   # leaving also clears context
+                    self.log_message("group link: LEFT %r", old)
+                    self._send(200, {"ok": True, "left": old})
+                else:
+                    hit = resolve_group(d.get("name", ""))
+                    if not hit:
+                        self._send(200, {"ok": False,
+                                         "error": "no matching Telegram group",
+                                         "known_groups": sorted(known_groups().values())})
+                    else:
+                        GROUP.update(chat_id=hit[0], title=hit[1])
+                        _save_group()
+                        self.log_message("group link: %r -> %s (%d)",
+                                         d.get("name"), hit[1], hit[0])
+                        archive("you", f"[voice chat linked to this group — the live "
+                                       f"spoken conversation is now mirrored here]")
+                        self._send(200, {"ok": True, "title": hit[1]})
             elif r == "/reset":
                 bridge.reset(BRIDGE_CHAT)
                 archive("you", "[cleared context — new conversation]")

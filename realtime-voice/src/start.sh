@@ -6,7 +6,9 @@
 # Fallback: --quick uses an ephemeral Cloudflare quick tunnel (no Tailscale needed).
 cd "$(dirname "$0")"
 exec 9>.lock
-flock -n 9 || exec flock 9 true   # wait out a concurrent starter, don't stack up
+# Wait out a concurrent starter (lock releases when it exits). The server itself
+# must NOT inherit fd 9 (see 9>&- below) or every later start.sh would give up here.
+flock -w 30 9 || { echo "start.sh: lock held too long — is another starter stuck?"; exit 1; }
 
 [ "$1" = "--rotate" ] && rm -f .secret
 [ -s .secret ] || head -c16 /dev/urandom | xxd -p | tr -d ' \n' > .secret
@@ -15,7 +17,7 @@ SECRET=$(cat .secret)
 pkill -f "realtime/server.py" 2>/dev/null
 fuser -k 8478/tcp 2>/dev/null   # server may have been started as plain "python3 server.py"
 sleep 1
-nohup python3 server.py >> server.log 2>&1 &
+nohup python3 server.py 9>&- >> server.log 2>&1 &
 
 if [ "$1" = "--quick" ]; then
   pkill -f "cloudflared tunnel --url http://127.0.0.1:8478" 2>/dev/null

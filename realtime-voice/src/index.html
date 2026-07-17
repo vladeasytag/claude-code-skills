@@ -16,9 +16,13 @@
   #dot { width: 12px; height: 12px; border-radius: 50%; background: #555; }
   #dot.on { background: #4caf50; animation: p 1.2s infinite; }
   @keyframes p { 50% { opacity: .35; } }
+  #grp { display: none; padding: 10px 14px; background: #14304a; color: #8ecbff;
+         font-weight: 600; font-size: 15px; border-bottom: 1px solid #2a5580;
+         flex: none; }
 </style>
 </head>
 <body>
+<div id="grp"></div>
 <div id="log"><div class="sys">Tap Start, allow the microphone, and just talk.
 Casual chat is answered instantly by the voice model; anything real goes to Claude
 (you'll hear "one moment").</div></div>
@@ -297,10 +301,47 @@ async function openCamera(item) {
   document.body.appendChild(box);
 }
 
+// Telegram group link: the banner stays on top of the page while linked, and the
+// server mirrors the whole spoken exchange silently into that group.
+function setGroupBanner(title) {
+  const g = document.getElementById('grp');
+  g.textContent = title ? '📌 ' + title : '';
+  g.style.display = title ? 'block' : 'none';
+}
+
+async function switchGroup(item) {
+  const name = JSON.parse(item.arguments).name;
+  let r;
+  try {
+    r = await (await fetch('group', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name})})).json();
+  } catch (e) { r = {ok: false, error: String(e)}; }
+  if (r.ok) { setGroupBanner(r.title); log('sys', '📌 linked to ' + r.title); }
+  else log('sys', 'group not found: ' + name);
+  toolReply(item.call_id, r);
+}
+
+async function leaveGroup(item) {
+  let r;
+  try {
+    r = await (await fetch('group', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({leave: true})})).json();
+  } catch (e) { r = {ok: false, error: String(e)}; }
+  setGroupBanner(null);
+  document.getElementById('log').innerHTML = '';
+  log('sys', 'left the group — standalone chat, fresh context');
+  pendingReconnect = true;   // model context clears once the confirmation plays out
+  toolReply(item.call_id, r);
+}
+
 async function handleTool(item) {
   if (item.name === 'open_camera') return openCamera(item);
   if (item.name === 'clear_chat') return clearChat(item);
   if (item.name === 'show_media') return showMedia(item);
+  if (item.name === 'switch_group') return switchGroup(item);
+  if (item.name === 'leave_group') return leaveGroup(item);
   const q = JSON.parse(item.arguments).question;
   log('sys', '→ Claude: ' + q);
   let out;
@@ -317,6 +358,8 @@ async function handleTool(item) {
 document.getElementById('btn').onclick = () =>
   (live ? stop() : start().catch(e => log('sys', 'failed: ' + e)));
 document.getElementById('cam').onclick = () => openCamera(null);
+// Restore the group banner if the server is still linked from a previous visit.
+fetch('group').then(r => r.json()).then(d => setGroupBanner(d.title)).catch(() => {});
 </script>
 </body>
 </html>
