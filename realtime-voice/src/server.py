@@ -229,6 +229,22 @@ TOOLS = [{
     },
 }, {
     "type": "function",
+    "name": "set_font_size",
+    "description": "Change the on-screen transcript font size. Call IMMEDIATELY "
+                   "when the user asks to make the text/font bigger or smaller, or "
+                   "names a size ('set font size to 20'). Instant — no 'one "
+                   "moment'; afterwards say two-three words at most.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["bigger", "smaller", "set", "reset"]},
+            "size": {"type": "number",
+                     "description": "Target size in pixels (10-40), only with action 'set'."},
+        },
+        "required": ["action"],
+    },
+}, {
+    "type": "function",
     "name": "switch_group",
     "description": "Link this voice chat to a Telegram group. Call IMMEDIATELY "
                    "when the user asks to switch/move/sneak into a group, project "

@@ -336,7 +336,22 @@ async function leaveGroup(item) {
   toolReply(item.call_id, r);
 }
 
+// Voice-controlled transcript font size, persisted across visits.
+function setFontSize(item) {
+  const a = JSON.parse(item.arguments);
+  let px = parseFloat(localStorage.getItem('fontpx')) || 15;
+  if (a.action === 'bigger') px += 3;
+  else if (a.action === 'smaller') px -= 3;
+  else if (a.action === 'set' && a.size) px = a.size;
+  else if (a.action === 'reset') px = 15;
+  px = Math.max(10, Math.min(40, px));
+  localStorage.setItem('fontpx', px);
+  document.getElementById('log').style.fontSize = px + 'px';
+  toolReply(item.call_id, {font_px: px});
+}
+
 async function handleTool(item) {
+  if (item.name === 'set_font_size') return setFontSize(item);
   if (item.name === 'open_camera') return openCamera(item);
   if (item.name === 'clear_chat') return clearChat(item);
   if (item.name === 'show_media') return showMedia(item);
@@ -360,6 +375,9 @@ document.getElementById('btn').onclick = () =>
 document.getElementById('cam').onclick = () => openCamera(null);
 // Restore the group banner if the server is still linked from a previous visit.
 fetch('group').then(r => r.json()).then(d => setGroupBanner(d.title)).catch(() => {});
+// Restore the chosen font size.
+{ const px = parseFloat(localStorage.getItem('fontpx'));
+  if (px) document.getElementById('log').style.fontSize = px + 'px'; }
 </script>
 </body>
 </html>
