@@ -229,6 +229,19 @@ TOOLS = [{
     },
 }, {
     "type": "function",
+    "name": "show_status_text",
+    "description": "Show or hide the small gray status lines on screen (system "
+                   "log: connection notices, 'Claude answered', media captions). "
+                   "Call IMMEDIATELY when the user asks to hide or show that "
+                   "small/gray/status text. Instant; afterwards say two-three "
+                   "words at most.",
+    "parameters": {
+        "type": "object",
+        "properties": {"visible": {"type": "boolean"}},
+        "required": ["visible"],
+    },
+}, {
+    "type": "function",
     "name": "set_font_size",
     "description": "Change the on-screen transcript font size. Call IMMEDIATELY "
                    "when the user asks to make the text/font bigger or smaller, or "

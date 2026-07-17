@@ -9,6 +9,7 @@
          margin: 0; display: flex; flex-direction: column; height: 100dvh; }
   #log { flex: 1; overflow-y: auto; padding: 14px; font-size: 15px; line-height: 1.45; }
   .you { color: #8ecbff; } .ai { color: #b5f2b5; } .sys { color: #888; font-size: 13px; }
+  body.nosys .sys { display: none; }
   #bar { padding: 14px; display: flex; gap: 10px; align-items: center; }
   #btn { flex: 1; padding: 16px; font-size: 18px; border: 0; border-radius: 12px;
          background: #2e7d32; color: #fff; }
@@ -39,6 +40,7 @@ Casual chat is answered instantly by the voice model; anything real goes to Clau
       <option value="coral">Coral ♀</option>
     </select>
     <label style="font-size:11px;color:#aaa;white-space:nowrap"><input type="checkbox" id="duplex" checked> mic off when talking</label>
+    <label style="font-size:11px;color:#aaa;white-space:nowrap"><input type="checkbox" id="sysbox"> status text</label>
   </div>
 </div>
 <script>
@@ -350,7 +352,22 @@ function setFontSize(item) {
   toolReply(item.call_id, {font_px: px});
 }
 
+// Show/hide the small gray status lines (.sys), persisted; hidden by default.
+function applySys() {
+  const on = localStorage.getItem('showsys') === '1';
+  document.body.classList.toggle('nosys', !on);
+  document.getElementById('sysbox').checked = on;
+}
+
+function setStatusText(item) {
+  const v = !!JSON.parse(item.arguments).visible;
+  localStorage.setItem('showsys', v ? '1' : '0');
+  applySys();
+  toolReply(item.call_id, {visible: v});
+}
+
 async function handleTool(item) {
+  if (item.name === 'show_status_text') return setStatusText(item);
   if (item.name === 'set_font_size') return setFontSize(item);
   if (item.name === 'open_camera') return openCamera(item);
   if (item.name === 'clear_chat') return clearChat(item);
@@ -378,6 +395,9 @@ fetch('group').then(r => r.json()).then(d => setGroupBanner(d.title)).catch(() =
 // Restore the chosen font size.
 { const px = parseFloat(localStorage.getItem('fontpx'));
   if (px) document.getElementById('log').style.fontSize = px + 'px'; }
+document.getElementById('sysbox').onchange = e => {
+  localStorage.setItem('showsys', e.target.checked ? '1' : '0'); applySys(); };
+applySys();
 </script>
 </body>
 </html>
