@@ -59,7 +59,7 @@ def _save_group():
 
 
 def known_groups():
-    """Telegram groups the gateway has seen (from the bridge sessions file),
+    """Telegram groups the gateway has seen (from the bridge sessions file).
     Duplicate titles (group->supergroup migrations) keep only the most recently
     active chat_id, so we never post into a dead pre-migration group."""
     cands = {}
