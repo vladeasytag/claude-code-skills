@@ -13,6 +13,7 @@ flock -n 9 || exec flock 9 true   # wait out a concurrent starter, don't stack u
 SECRET=$(cat .secret)
 
 pkill -f "realtime/server.py" 2>/dev/null
+fuser -k 8478/tcp 2>/dev/null   # server may have been started as plain "python3 server.py"
 sleep 1
 nohup python3 server.py >> server.log 2>&1 &
 
