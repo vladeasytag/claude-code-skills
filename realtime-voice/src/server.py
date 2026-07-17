@@ -229,6 +229,26 @@ TOOLS = [{
     },
 }, {
     "type": "function",
+    "name": "set_text_color",
+    "description": "Change the transcript text color on screen. Call IMMEDIATELY "
+                   "when the user asks to change the color of the text ('make my "
+                   "text yellow', 'make your text white', 'reset the colors'). "
+                   "Instant; afterwards say two-three words at most.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "target": {"type": "string", "enum": ["user", "assistant", "both"],
+                       "description": "'user' = the user's spoken lines, "
+                                      "'assistant' = the bot's lines; default both."},
+            "color": {"type": "string",
+                      "description": "CSS color in ENGLISH ('yellow', '#ffcc00'; "
+                                     "translate spoken color names), or 'reset' "
+                                     "to restore the defaults."},
+        },
+        "required": ["color"],
+    },
+}, {
+    "type": "function",
     "name": "show_status_text",
     "description": "Show or hide the small gray status lines on screen (system "
                    "log: connection notices, 'Claude answered', media captions). "

@@ -8,7 +8,8 @@
   body { font-family: -apple-system, system-ui, sans-serif; background: #111; color: #eee;
          margin: 0; display: flex; flex-direction: column; height: 100dvh; }
   #log { flex: 1; overflow-y: auto; padding: 14px; font-size: 15px; line-height: 1.45; }
-  .you { color: #8ecbff; } .ai { color: #b5f2b5; } .sys { color: #888; font-size: 13px; }
+  .you { color: var(--cyou, #8ecbff); } .ai { color: var(--cai, #b5f2b5); }
+  .sys { color: #888; font-size: 13px; }
   body.nosys .sys { display: none; }
   #bar { padding: 14px; display: flex; gap: 10px; align-items: center; }
   #btn { flex: 1; padding: 16px; font-size: 18px; border: 0; border-radius: 12px;
@@ -366,7 +367,32 @@ function setStatusText(item) {
   toolReply(item.call_id, {visible: v});
 }
 
+// Voice-controlled text colors for the two transcript sides, persisted.
+function applyColors() {
+  const y = localStorage.getItem('cyou'), a = localStorage.getItem('cai');
+  document.documentElement.style.setProperty('--cyou', y || '#8ecbff');
+  document.documentElement.style.setProperty('--cai', a || '#b5f2b5');
+}
+
+function setTextColor(item) {
+  const req = JSON.parse(item.arguments);
+  const t = req.target || 'both', c = (req.color || '').toLowerCase();
+  if (c === 'default' || c === 'reset') {
+    if (t !== 'assistant') localStorage.removeItem('cyou');
+    if (t !== 'user') localStorage.removeItem('cai');
+    applyColors();
+    return toolReply(item.call_id, {ok: true, reset: t});
+  }
+  if (!CSS.supports('color', c))
+    return toolReply(item.call_id, {ok: false, error: 'unknown color: ' + c});
+  if (t !== 'assistant') localStorage.setItem('cyou', c);
+  if (t !== 'user') localStorage.setItem('cai', c);
+  applyColors();
+  toolReply(item.call_id, {ok: true, target: t, color: c});
+}
+
 async function handleTool(item) {
+  if (item.name === 'set_text_color') return setTextColor(item);
   if (item.name === 'show_status_text') return setStatusText(item);
   if (item.name === 'set_font_size') return setFontSize(item);
   if (item.name === 'open_camera') return openCamera(item);
@@ -398,6 +424,8 @@ fetch('group').then(r => r.json()).then(d => setGroupBanner(d.title)).catch(() =
 document.getElementById('sysbox').onchange = e => {
   localStorage.setItem('showsys', e.target.checked ? '1' : '0'); applySys(); };
 applySys();
+applyColors();
+applyColors();
 </script>
 </body>
 </html>
