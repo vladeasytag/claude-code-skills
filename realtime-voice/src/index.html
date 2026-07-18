@@ -31,6 +31,7 @@ Casual chat is answered instantly by the voice model; anything real goes to Clau
 <div id="bar">
   <div id="dot"></div>
   <button id="btn">▶ Start voice conversation</button>
+  <button id="mute" aria-label="mute mic" style="width:46px;height:46px;border-radius:50%;border:2px solid #888;background:#222;font-size:20px;flex:none">🎤</button>
   <button id="cam" aria-label="camera" style="width:46px;height:46px;border-radius:50%;border:3px solid #fff;background:#c62828;flex:none"></button>
   <div style="display:flex;flex-direction:column;gap:5px;align-items:stretch">
     <select id="voice" style="padding:5px;border-radius:8px;background:#222;color:#eee;border:1px solid #444;font-size:12px">
@@ -61,6 +62,7 @@ async function start() {
   mic = await navigator.mediaDevices.getUserMedia({audio: {
     echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
   pc.addTrack(mic.getTracks()[0], mic);
+  if (micMuted) mic.getTracks()[0].enabled = false;   // mute persists across reconnects
   dc = pc.createDataChannel('oai-events');
   dc.onmessage = e => onEvent(JSON.parse(e.data));
   dc.onopen = () => { live = true; document.getElementById('dot').className = 'on';
@@ -83,15 +85,28 @@ function stop() {
   log('sys', 'disconnected');
 }
 
+// Manual mic mute: keeps the conversation (and bot speech) alive, only stops
+// listening. Voice can turn it OFF ("mic off" → mute_mic tool) but obviously
+// not back on — unmuting is the button only.
+let micMuted = false;
+function setMute(m) {
+  micMuted = m;
+  if (mic) mic.getTracks()[0].enabled = !m;
+  const b = document.getElementById('mute');
+  b.textContent = m ? '🔇' : '🎤';
+  b.style.borderColor = m ? '#c62828' : '#888';
+  b.style.background = m ? '#3a1414' : '#222';
+}
+
 // Half-duplex: mute the mic while the assistant is speaking so a loud speaker
 // can't feed the bot's own voice back in (it starts talking to itself). Costs
 // voice barge-in (tap Stop to cut it off); toggle below if using headphones.
 let unmuteT;
 function setMic(on) {
   clearTimeout(unmuteT);
-  if (!mic) return;
+  if (!mic || micMuted) return;
   const gate = document.getElementById('duplex').checked;
-  if (on) unmuteT = setTimeout(() => mic.getTracks()[0].enabled = true, 350);
+  if (on) unmuteT = setTimeout(() => { if (!micMuted) mic.getTracks()[0].enabled = true; }, 350);
   else if (gate) mic.getTracks()[0].enabled = false;
 }
 
@@ -238,7 +253,7 @@ function closeCamera(snapped) {
   if (!wasOpen) return;
   // Swallow the close-tap noise so VAD doesn't fire a response off it.
   if (mic) { mic.getTracks()[0].enabled = false;
-    setTimeout(() => { if (mic && !pendingReconnect) mic.getTracks()[0].enabled = true; }, 800); }
+    setTimeout(() => { if (mic && !pendingReconnect && !micMuted) mic.getTracks()[0].enabled = true; }, 800); }
   // Keep the model's world-state accurate, or it refuses the next "open camera"
   // believing the camera is still up. (The snapped case gets its own note after
   // the upload — see uploadPhoto.)
@@ -291,7 +306,7 @@ async function openCamera(item) {
     // response not initiated by real user speech until the 5s ask fires.
     quiet = true;
     if (mic) { mic.getTracks()[0].enabled = false;
-      setTimeout(() => { if (mic && !pendingReconnect) mic.getTracks()[0].enabled = true; }, 1200); }
+      setTimeout(() => { if (mic && !pendingReconnect && !micMuted) mic.getTracks()[0].enabled = true; }, 1200); }
     c.toBlob(b => b && uploadPhoto(b), 'image/jpeg', 0.85);
   };
   const x = document.createElement('button');
@@ -392,6 +407,10 @@ function setTextColor(item) {
 }
 
 async function handleTool(item) {
+  if (item.name === 'mute_mic') {
+    setMute(true);
+    return toolReply(item.call_id, {muted: true, note: 'unmuting is by the mic button only'});
+  }
   if (item.name === 'set_text_color') return setTextColor(item);
   if (item.name === 'show_status_text') return setStatusText(item);
   if (item.name === 'set_font_size') return setFontSize(item);
@@ -416,6 +435,7 @@ async function handleTool(item) {
 document.getElementById('btn').onclick = () =>
   (live ? stop() : start().catch(e => log('sys', 'failed: ' + e)));
 document.getElementById('cam').onclick = () => openCamera(null);
+document.getElementById('mute').onclick = () => setMute(!micMuted);
 // Restore the group banner if the server is still linked from a previous visit.
 fetch('group').then(r => r.json()).then(d => setGroupBanner(d.title)).catch(() => {});
 // Restore the chosen font size.
@@ -424,7 +444,6 @@ fetch('group').then(r => r.json()).then(d => setGroupBanner(d.title)).catch(() =
 document.getElementById('sysbox').onchange = e => {
   localStorage.setItem('showsys', e.target.checked ? '1' : '0'); applySys(); };
 applySys();
-applyColors();
 applyColors();
 </script>
 </body>

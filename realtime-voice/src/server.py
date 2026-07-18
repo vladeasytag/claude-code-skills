@@ -249,6 +249,16 @@ TOOLS = [{
     },
 }, {
     "type": "function",
+    "name": "mute_mic",
+    "description": "Mute the user's microphone WITHOUT stopping the conversation. "
+                   "Call IMMEDIATELY when the user says 'mic off' / 'mute the mic' "
+                   "/ 'stop listening'. You keep speaking "
+                   "normally but cannot hear them until they tap the mic button to "
+                   "unmute (voice cannot unmute — you can't hear it). After the "
+                   "call, confirm in two-three words ('Mic is off').",
+    "parameters": {"type": "object", "properties": {}},
+}, {
+    "type": "function",
     "name": "show_status_text",
     "description": "Show or hide the small gray status lines on screen (system "
                    "log: connection notices, 'Claude answered', media captions). "
