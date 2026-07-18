@@ -31,7 +31,7 @@ Casual chat is answered instantly by the voice model; anything real goes to Clau
 <div id="bar">
   <div id="dot"></div>
   <button id="btn">▶ Start voice conversation</button>
-  <button id="mute" aria-label="mute mic" style="width:46px;height:46px;border-radius:50%;border:2px solid #888;background:#222;font-size:20px;flex:none">🎤</button>
+  <button id="mute" aria-label="mute mic" style="display:none;width:46px;height:46px;border-radius:50%;border:2px solid #888;background:#222;font-size:20px;flex:none">🎤</button>
   <button id="cam" aria-label="camera" style="width:46px;height:46px;border-radius:50%;border:3px solid #fff;background:#c62828;flex:none"></button>
   <div style="display:flex;flex-direction:column;gap:5px;align-items:stretch">
     <select id="voice" style="padding:5px;border-radius:8px;background:#222;color:#eee;border:1px solid #444;font-size:12px">
@@ -67,6 +67,7 @@ async function start() {
   dc.onmessage = e => onEvent(JSON.parse(e.data));
   dc.onopen = () => { live = true; document.getElementById('dot').className = 'on';
     document.getElementById('btn').textContent = '■ Stop'; document.getElementById('btn').className = 'live';
+    document.getElementById('mute').style.display = '';
     log('sys', 'connected — talk now'); };
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
@@ -80,6 +81,7 @@ function stop() {
   if (mic) mic.getTracks().forEach(t => t.stop());
   if (pc) pc.close();
   live = false; document.getElementById('dot').className = '';
+  document.getElementById('mute').style.display = 'none';
   document.getElementById('btn').textContent = '▶ Start voice conversation';
   document.getElementById('btn').className = '';
   log('sys', 'disconnected');
