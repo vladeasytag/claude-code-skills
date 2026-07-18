@@ -95,7 +95,12 @@ function setMute(m) {
   micMuted = m;
   if (mic) mic.getTracks()[0].enabled = !m;
   const b = document.getElementById('mute');
-  b.textContent = m ? '🔇' : '🎤';
+  // Muted = the SAME mic icon with a red crossed circle overlaid (not a speaker).
+  b.innerHTML = m
+    ? '<span style="position:relative;display:inline-block;line-height:1">🎤' +
+      '<span style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);' +
+      'font-size:38px;opacity:.85;pointer-events:none">🚫</span></span>'
+    : '🎤';
   b.style.borderColor = m ? '#c62828' : '#888';
   b.style.background = m ? '#3a1414' : '#222';
 }
