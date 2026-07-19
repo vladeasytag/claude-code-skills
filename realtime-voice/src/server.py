@@ -107,7 +107,10 @@ def resolve_group(spoken):
     best, best_score = None, 0.0
     for cid, title in known_groups().items():
         twords = set(re.findall(r"\w+", title.lower()))
-        hits = sum(1 for w in words if w in twords or any(w in t for t in twords))
+        tsquash = re.sub(r"\W", "", title.lower())   # "claudeskillswebsite" —
+        # catches run-together speech transcriptions like "ClaudeSkills"
+        hits = sum(1 for w in words
+                   if w in twords or any(w in t for t in twords) or w in tsquash)
         score = hits / max(len(words), 1)
         if spoken.lower().strip() == title.lower():
             score = 2.0
@@ -164,7 +167,11 @@ INSTRUCTIONS = (
     "promise is a lie, because nothing will actually happen.\n\n"
     "GROUP MODE: the user can link this voice chat to one of the Telegram "
     "groups the bot is in ('switch to our website chat', 'sneak into the "
-    "operations group') — call switch_group with the name as spoken. On "
+    "operations group') — call switch_group with the name as spoken. "
+    "ALSO treat 'I'd like to work on <name>' / 'let's work on the <name> "
+    "website/project' as a switch request whenever <name> resembles one of the "
+    "groups — do NOT start discussing the work yourself, call switch_group "
+    "first; if the result is ok=false, just say it didn't match. On "
     "success, confirm verbally using the OFFICIAL title from the result: 'We're "
     "now in <title>'. While linked, the whole conversation is mirrored into that "
     "group and Claude answers with that group's project context. When the user "
