@@ -68,7 +68,12 @@ async function start() {
   dc.onopen = () => { live = true; document.getElementById('dot').className = 'on';
     document.getElementById('btn').textContent = '■ Stop'; document.getElementById('btn').className = 'live';
     document.getElementById('mute').style.display = '';
-    log('sys', 'connected — talk now'); };
+    log('sys', 'connected — talk now');
+    if (micMuted) {   // warn aloud: the user expects to talk but won't be heard
+      log('sys', '⚠ mic is muted');
+      dc.send(JSON.stringify({type: 'response.create', response: {instructions:
+        "Say exactly this and nothing more: 'Mic is muted.'"}}));
+    } };
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   const r = await fetch('https://api.openai.com/v1/realtime/calls?model=gpt-realtime', {
