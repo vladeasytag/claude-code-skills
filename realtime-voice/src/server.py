@@ -70,20 +70,34 @@ def known_groups():
     except Exception as e:
         print(f"[server] known_groups failed: {e}", flush=True)
         return {}
-    last = {}
-    if chatdb:
-        try:
-            with chatdb._lock:
-                last = {str(k): v for k, v in chatdb._get().execute(
-                    "SELECT chat_id, MAX(epoch) FROM messages GROUP BY chat_id")}
-        except Exception:
-            pass
+    last = _last_activity()
     by_title = {}
     for cid, title in cands.items():
         prev = by_title.get(title)
         if prev is None or (last.get(str(cid)) or 0) > (last.get(str(prev)) or 0):
             by_title[title] = cid
     return {cid: title for title, cid in by_title.items()}
+
+
+def _last_activity():
+    """Most recent archived message per chat, str-keyed: {'<chat_id>': epoch}."""
+    if not chatdb:
+        return {}
+    try:
+        with chatdb._lock:
+            return {str(k): v for k, v in chatdb._get().execute(
+                "SELECT chat_id, MAX(epoch) FROM messages GROUP BY chat_id")}
+    except Exception:
+        return {}
+
+
+def group_list():
+    """Groups for the on-screen selector, most recently active first."""
+    last = _last_activity()
+    items = [{"chat_id": c, "title": t, "last": last.get(str(c)) or 0}
+             for c, t in known_groups().items()]
+    items.sort(key=lambda i: (-i["last"], i["title"].lower()))
+    return items
 
 
 def resolve_group(spoken):
@@ -568,6 +582,8 @@ class H(BaseHTTPRequestHandler):
                        "text/html; charset=utf-8")
         elif r == "/group":
             self._send(200, {"title": GROUP["title"]})
+        elif r == "/groups":
+            self._send(200, {"items": group_list()})
         elif r and r.startswith("/file/") and MEDIA_TOKENS.get(r[6:]):
             self._serve_media(MEDIA_TOKENS[r[6:]])
         else:
@@ -608,7 +624,11 @@ class H(BaseHTTPRequestHandler):
                     self.log_message("group link: LEFT %r", old)
                     self._send(200, {"ok": True, "left": old})
                 else:
-                    hit = resolve_group(d.get("name", ""))
+                    if d.get("chat_id"):   # direct pick from the on-screen selector
+                        title = known_groups().get(int(d["chat_id"]))
+                        hit = (int(d["chat_id"]), title) if title else None
+                    else:
+                        hit = resolve_group(d.get("name", ""))
                     if not hit:
                         self._send(200, {"ok": False,
                                          "error": "no matching Telegram group",
