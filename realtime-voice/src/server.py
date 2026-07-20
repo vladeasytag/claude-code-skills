@@ -17,7 +17,7 @@ start.sh): GET /<secret>/ (the app), POST /<secret>/session (mint a 10-min
 ephemeral Realtime token — the real API key never reaches the browser),
 POST /<secret>/ask (the Claude bridge). Restart start.sh to rotate the URL.
 """
-import datetime, json, mimetypes, os, re, sys, threading, time, urllib.parse, urllib.request, uuid
+import datetime, difflib, json, mimetypes, os, re, sys, threading, time, urllib.parse, urllib.request, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DIR = os.path.dirname(os.path.abspath(__file__))
@@ -100,17 +100,48 @@ def group_list():
     return items
 
 
+def _soundex(w):
+    """Classic Soundex — 'clod', 'cloud' and 'claude' all code to C430, so
+    misheard speech transcriptions still find their group."""
+    m = {'b': '1', 'f': '1', 'p': '1', 'v': '1',
+         'c': '2', 'g': '2', 'j': '2', 'k': '2', 'q': '2', 's': '2', 'x': '2', 'z': '2',
+         'd': '3', 't': '3', 'l': '4', 'm': '5', 'n': '5', 'r': '6'}
+    w = re.sub(r'[^a-z]', '', w.lower())
+    if not w:
+        return ''
+    out, prev = w[0], m.get(w[0], '')
+    for ch in w[1:]:
+        c = m.get(ch, '')
+        if c and c != prev:
+            out += c
+        prev = c
+    return (out + '000')[:4]
+
+
+def _word_hits(w, twords, tsquash, variants):
+    if w in twords or any(w in t for t in twords) or w in tsquash:
+        return True
+    sx = _soundex(w)
+    if any(sx == _soundex(v) for v in variants):
+        return True
+    return any(difflib.SequenceMatcher(None, w, v).ratio() >= 0.75 for v in variants)
+
+
 def resolve_group(spoken):
-    """Fuzzy-match a spoken name ('our website chat') to a known group title."""
+    """Fuzzy-match a spoken name ('our website chat') to a known group title.
+    Tolerates run-together words ('ClaudeSkills') and mispronunciations /
+    mis-transcriptions ('Clod Skills', 'Cloudskills') via Soundex + similarity."""
     stop = {"the", "our", "a", "chat", "group", "project", "chats", "team"}
     words = [w for w in re.findall(r"\w+", spoken.lower()) if w not in stop]
     best, best_score = None, 0.0
     for cid, title in known_groups().items():
-        twords = set(re.findall(r"\w+", title.lower()))
-        tsquash = re.sub(r"\W", "", title.lower())   # "claudeskillswebsite" —
-        # catches run-together speech transcriptions like "ClaudeSkills"
-        hits = sum(1 for w in words
-                   if w in twords or any(w in t for t in twords) or w in tsquash)
+        tlist = re.findall(r"\w+", title.lower())
+        twords = set(tlist)
+        tsquash = re.sub(r"\W", "", title.lower())   # "claudeskillswebsite"
+        # variants: each title word + adjacent-pair concatenations, so both
+        # "clod"~"claude" and "cloudskills"~"claudeskills" can match
+        variants = twords | {a + b for a, b in zip(tlist, tlist[1:])}
+        hits = sum(1 for w in words if _word_hits(w, twords, tsquash, variants))
         score = hits / max(len(words), 1)
         if spoken.lower().strip() == title.lower():
             score = 2.0
