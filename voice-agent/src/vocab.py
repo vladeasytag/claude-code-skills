@@ -160,11 +160,18 @@ def load(path):
         return {}
 
 
+_SAVE_LOCK = __import__("threading").Lock()
+
+
 def save(path, d):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False, indent=1)
-    os.replace(tmp, path)
+    # A unique temp name per write, under a lock: two requests saving at once
+    # shared one ".tmp" and the second os.replace failed (seen 2026-11-14,
+    # "vocabulary failed: No such file ... vocabulary.json.tmp").
+    with _SAVE_LOCK:
+        tmp = f"{path}.{os.getpid()}.{__import__('threading').get_ident()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, path)
 
 
 def view(d):
@@ -289,6 +296,9 @@ def handle(path, req, rebuild_fn, archive_db=None):
     """One relay request: {} | {"rebuild": true} | {"add": {...}} |
     {"remove": term}, each optionally with "chat_id" for that chat's list."""
     d = load(path)
+    # A read is the common case (every session mint, every /correct) and must
+    # not rewrite the file; only a build or an edit saves.
+    _before = json.dumps(d, sort_keys=True)
     # Rebuilt on request, when empty, and once a day on its own (the next
     # request after 24 h), so no cron is needed for the list to stay fresh.
     stale = lambda e: time.time() - float(e.get("built_at") or 0) > 86400
@@ -310,8 +320,10 @@ def handle(path, req, rebuild_fn, archive_db=None):
                                     exclude=[i["term"] for i in acct[:300]])
             e["built_at"] = e["updated"] = time.time()
         _apply_overlay(e, req)
-        save(path, d)
+        if json.dumps(d, sort_keys=True) != _before:
+            save(path, d)
         return {**view(e), "chat_id": int(cid)}
     _apply_overlay(d, req)
-    save(path, d)
+    if json.dumps(d, sort_keys=True) != _before:
+        save(path, d)
     return view(d)
